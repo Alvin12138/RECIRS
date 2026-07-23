@@ -141,7 +141,7 @@ uart_2ndstage=1
 arm_64bit=1
 
 # Loads at 0x00 and executes it in EL3 in AArch64
-armstub=bl31-bl32.bin
+armstub=bl31-bl32-hello-world.bin
 
 # Implement device tree fix for optee
 dtoverlay=optee-fix
@@ -157,10 +157,6 @@ device_tree_end=0x2bd10f00
 
 # Initial ram file system (end of the device tree) ==> To mount the root filesystem
 initramfs rootfs.cpio.gz 0x2bd10f00
-
-#################################################### scp
-scp ~/Download/xxx sustech@10.16.88.51:/home/sustech/
-scp sustech@10.16.88.51:/home/sustech/log.txt ~/Download/
 
 
 #################################################### tee-supplicant
