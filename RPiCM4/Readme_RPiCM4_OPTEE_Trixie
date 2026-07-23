@@ -1,0 +1,262 @@
+#################################################### This file is to install trixie with OP-TEE into RPi CM4
+#################################################### rpi-imager install debian trixie
+#################################################### install usbboot
+git clone --recurse-submodules --shallow-submodules --depth=1 https://github.com/raspberrypi/usbboot 
+## install usbboot following its readme
+#################################################### cd ./usbboot & sudo rpiboot ##### get bootfs and rootfs
+
+#################################################### atf
+git clone https://github.com/ARM-software/arm-trusted-firmware.git
+cd arm-trusted-firmware
+nano ./plat/rpi/rpi4/rpi4_bl31_setup.c
+# add the following codes after rpi3_console_init();
+########################################### rpi4_bl31_setup.c
+const size_t trustedOS_size = 500 * 1024;									// Define the OP-TEE OS image size (500k bytes)
+	const void *const fip_addr = (const void*)0x20000;								// Define the OP-TEE OS image load address (FIP address - 0x20000)
+	void *const trustedOS_addr = (void*)0x10100000;									// Define the OP-TEE OS image address (Secure Payload - 0x10100000)
+	VERBOSE("rpi4: copy trusted_os image (%lu bytes) from %p to %p\n", trustedOS_size, fip_addr, trustedOS_addr);
+	memcpy(trustedOS_addr, fip_addr, trustedOS_size);								// Copy the OP-TEE OS image to the entry address
+
+	/* Initialize the OP-TEE OS image info. */
+	bl32_image_ep_info.pc = (uintptr_t)trustedOS_addr;								// Define the bl32 entry point address (0x10100000)
+	bl32_image_ep_info.args.arg2 = rpi4_get_dtb_address();								// Define the Device Tree Blob (DTB) address
+	SET_SECURITY_STATE(bl32_image_ep_info.h.attr, SECURE);								// Define the Secure State
+	VERBOSE("rpi4: trusted_os entry: %p\n", (void*)bl32_image_ep_info.pc);
+	VERBOSE("rpi4: bl32 dtb: %p\n", (void*)bl32_image_ep_info.args.arg2);
+###########################################
+
+make CROSS_COMPILE=aarch64-none-linux-gnu- PLAT=rpi4 SPD=opteed DEBUG=1
+cp ./build/rpi4/debug/bl31.bin ../bl31-pad.tmp
+
+cd ..
+truncate --size=128K ./bl31-pad.tmp
+
+
+#################################################### optee-os
+git clone https://github.com/OP-TEE/optee_os.git
+cd optee_os
+cd core/arch/arm
+cp -r plat-rpi3 plat-rpi4
+# use the following to replace platform_config.h
+########################################### platform_config.h
+#ifndef PLATFORM_CONFIG_H
+#define PLATFORM_CONFIG_H
+
+#include <mm/generic_ram_layout.h>
+
+/* Make stacks aligned to data cache line length */
+#define STACK_ALIGNMENT		64
+
+#ifdef ARM64
+#ifdef CFG_WITH_PAGER
+#error "Pager not supported for ARM64"
+#endif
+#endif /* ARM64 */
+
+/* 16550 UART */
+#define CONSOLE_UART_BASE	0xfe215040 /* UART0 */
+#define CONSOLE_BAUDRATE	115200
+#define CONSOLE_UART_CLK_IN_HZ	48000000
+
+/*
+ * RPi memory map
+ *
+ * No secure memory on RPi...
+ *
+ *
+ *    Available to Linux <above>
+ *  0x0a00_0000
+ *    TA RAM: 16 MiB                          |
+ *  0x0842_0000                               | TZDRAM
+ *    TEE RAM: 4 MiB (TEE_RAM_VA_SIZE)	      |
+ *  0x0840_0000 [ARM Trusted Firmware       ] -
+ *  0x0840_0000 [TZDRAM_BASE, BL32_LOAD_ADDR] -
+ *    Shared memory: 4 MiB                    |
+ *  0x0800_0000                               | DRAM0
+ *    Available to Linux                      |
+ *  0x0000_0000 [DRAM0_BASE]                  -
+ *
+ */
+
+#define DRAM0_BASE		0x00000000
+#define DRAM0_SIZE		0x40000000
+
+#endif /* PLATFORM_CONFIG_H */
+###########################################
+cd ../../../
+
+make CROSS_COMPILE=aarch64-none-linux-gnu- PLATFORM=rpi4 CFG_ARM64_core=y CFG_USER_TA_TARGETS=ta_arm64 CFG_DT=y 
+
+# CFG_TA_ARM64=y CFG_REE_FS=y CFG_REE_FS_TA=n CFG_RPMB_FS=n
+make CROSS_COMPILE=aarch64-none-linux-gnu- PLATFORM=rpi4 CFG_ARM64_core=y CFG_USER_TA_TARGETS=ta_arm64 CFG_DT=y CFG_TA_ARM64=y CFG_REE_FS=y CFG_REE_FS_TA=y CFG_RPMB_FS=n
+
+cd ..
+cat ./bl31-pad.tmp optee_os/out/arm-plat-rpi4/core/tee-pager_v2.bin > ./bl31-bl32-hello-world.bin
+
+#################################################### linux
+git clone --depth=1 -b rpi-6.18.y https://github.com/raspberrypi/linux.git
+cd linux
+make ARCH=arm64 bcm2711_defconfig
+make ARCH=arm64 menuconfig #add optee tee
+
+make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image modules dtbs
+cp arch/arm64/boot/Image /media/sustech/bootfs/kernel8.img 
+cp arch/arm64/boot/dts/broadcom/*.dtb /media/sustech/bootfs/
+cp arch/arm64/boot/dts/overlays/*.dtb* /media/sustech/bootfs/overlays/
+
+sudo make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- INSTALL_MOD_PATH=/media/sustech/rootfs modules_install
+
+#################################################### optee-fix.dts
+cd ..
+nano optee-fix.dts
+########################################### optee-fix.dts
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/";
+
+		__overlay__ {
+			firmware {
+				optee-fix {
+					compatible = "linaro,optee-tz";
+					method = "smc";
+				};
+			};
+		};
+	};
+};
+###########################################
+./linux/scripts/dtc/dtc optee-fix.dts > optee-fix.dtbo
+cp optee-fix.dtbo /media/sustech/bootfs/overlays/
+
+
+#################################################### config.txt in bootfs
+# Enable UART
+enable_uart=1
+uart_2ndstage=1
+
+# 64-bit
+arm_64bit=1
+
+# Loads at 0x00 and executes it in EL3 in AArch64
+armstub=bl31-bl32.bin
+
+# Implement device tree fix for optee
+dtoverlay=optee-fix
+
+# Define the Kernel Address
+kernel_address=0x200000
+
+# Device Tree Address
+device_tree_address=0x2bd00f00
+
+# Device Tree End (64K bytes)
+device_tree_end=0x2bd10f00
+
+# Initial ram file system (end of the device tree) ==> To mount the root filesystem
+initramfs rootfs.cpio.gz 0x2bd10f00
+
+#################################################### scp
+scp ~/Download/xxx sustech@10.16.88.51:/home/sustech/
+scp sustech@10.16.88.51:/home/sustech/log.txt ~/Download/
+
+
+#################################################### tee-supplicant
+sudo systemctl status tee-supplicant
+sudo systemctl restart tee-supplicant
+
+sudo systemctl stop tee-supplicant
+sudo strace -f -o /tmp/tee_strace.log tee-supplicant -d /dev/teepriv0
+sudo ~/optee_examples/out/ca/optee_example_hello_world
+grep -i "optee\|ta\|\.ta" /tmp/tee_strace.log | head -40
+
+
+########################################### ERR [1945] TSUP:main:908: make_daemon(): -1
+ps aux | grep tee-supplicant
+sudo kill -9 <PID>
+
+cd ~/optee_client
+mkdir -p build && cd build
+cmake -DCMAKE_INSTALL_PREFIX=/usr ..
+make -j$(nproc)
+sudo make install
+sudo ldconfig   
+
+sudo rm -f /etc/systemd/system/tee-supplicant.service
+
+sudo tee /etc/systemd/system/tee-supplicant.service << 'EOF'
+[Unit]
+Description=TEE Supplicant
+DefaultDependencies=no
+Before=basic.target
+
+[Service]
+ExecStart=/usr/sbin/tee-supplicant
+Type=simple
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=basic.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now tee-supplicant
+
+sudo systemctl status tee-supplicant
+###########################################
+
+cd ~/optee_examples
+export TA_DEV_KIT_DIR=$HOME/export-ta_arm64
+make clean
+make -j$(nproc)
+sudo mkdir -p /lib/optee_armtz
+sudo cp out/ta/*.ta /lib/optee_armtz/
+sudo chmod 644 /lib/optee_armtz/*.ta
+sudo cp cfi_xxx/ta/include/cfi_ta.h /usr/include/
+
+sudo stdbuf -o0 -e0 ./core/openplc 2>&1 | tee timing_log_original.txt
+
+
+10.16.77.185
+
+
+#############################################/usr/lib/gcc/aarch64-linux-gnu/14/libgcc_s.so: file not recognized: file format not recognized
+
+sudo find /usr/include -type f -exec sh -c 'file "$1" | grep -q "data" && echo "$1"' _ {} \; | head -20
+/usr/include/python3.13/internal/pycore_uop_metadata.h
+/usr/include/python3.13/internal/pycore_opcode_metadata.h
+/usr/include/c++/14/ext/pb_ds/detail/list_update_map_/entry_metadata_base.hpp
+/usr/include/c++/14/ext/pb_ds/detail/branch_policy/null_node_metadata.hpp
+/usr/include/c++/14/ext/pb_ds/detail/list_update_policy/lu_counter_metadata.hpp
+/usr/include/c++/14/ext/pb_ds/detail/tree_policy/node_metadata_selector.hpp
+/usr/include/c++/14/ext/pb_ds/detail/trie_policy/node_metadata_selector.hpp
+/usr/include/c++/14/bits/text_encoding-data.h
+/usr/include/c++/14/bits/unicode-data.h
+/usr/include/c++/13/ext/pb_ds/detail/list_update_map_/entry_metadata_base.hpp
+/usr/include/c++/13/ext/pb_ds/detail/branch_policy/null_node_metadata.hpp
+/usr/include/c++/13/ext/pb_ds/detail/list_update_policy/lu_counter_metadata.hpp
+/usr/include/c++/13/ext/pb_ds/detail/tree_policy/node_metadata_selector.hpp
+/usr/include/c++/13/ext/pb_ds/detail/trie_policy/node_metadata_selector.hpp
+/usr/include/geany/plugindata.h
+
+# 1. recover libc header file
+sudo apt update
+sudo apt install --reinstall libc6-dev
+
+# 2. recover C++ standard file (GCC 13 and 14)
+sudo apt install --reinstall g++-13 libstdc++-13-dev
+sudo apt install --reinstall g++-14 libstdc++-14-dev
+
+# 3. recover Python header file
+sudo apt install --reinstall python3-dev python3.13-dev
+
+# 4. recover Geany
+sudo apt install --reinstall libgeany-dev
+
+# 5. validate recovery
+sudo find /usr/include -type f -exec sh -c 'file "$1" | grep -q "data" && echo "$1"' _ {} \;
+
