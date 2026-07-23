@@ -216,10 +216,6 @@ sudo cp cfi_xxx/ta/include/cfi_ta.h /usr/include/
 
 sudo stdbuf -o0 -e0 ./core/openplc 2>&1 | tee timing_log_original.txt
 
-
-10.16.77.185
-
-
 #############################################/usr/lib/gcc/aarch64-linux-gnu/14/libgcc_s.so: file not recognized: file format not recognized
 
 sudo find /usr/include -type f -exec sh -c 'file "$1" | grep -q "data" && echo "$1"' _ {} \; | head -20
@@ -256,3 +252,6 @@ sudo apt install --reinstall libgeany-dev
 # 5. validate recovery
 sudo find /usr/include -type f -exec sh -c 'file "$1" | grep -q "data" && echo "$1"' _ {} \;
 
+############################################ The deployment of other OpenPLC_v3 parts is similar to QEMUv8, 
+############################################ but since RPi does not support PAC-BTI, 
+############################################ it needs to be implemented: change PAC_ENABLE=1 to 0 in scripts/compile_prgram.sh
