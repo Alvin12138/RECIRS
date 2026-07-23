@@ -1,0 +1,7 @@
+##### cfi_shadow_stack_multithreads_tag_degrade_forward is latest version 
+##### by adding multithreads, tag, degrade mode, and forward-edge
+##### so ./host cfi_test is not applicable (this is applicable for cfi_shadow_stack, the initial version)
+##### just recompile ./ta
+##### and cp 12345678-1234-1234-1234-56789abcdef0.ta /lib/optee_armtz/ in QEMUv8 normal world
+##### and chmod 644 /lib/optee_armtz/*
+##### and cp ./ta/include/cfi_ta.h /usr/include/
